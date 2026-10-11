@@ -1,47 +1,78 @@
+
 name: CI Pipeline
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # ИСПРАВЛЕНО: "docker compose" вместо "docker-compose" (v1 удалён на ubuntu-latest)
-      - name: Build and start docker compose
+      - name: Build and start services
         run: docker compose up -d --build web selenium-hub chrome
 
       - name: Wait for web service
         run: |
-          for i in $(seq 1 30); do
-            curl -sf http://localhost:5000 && break
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:5000/; then
+              echo "Web service is ready"
+              exit 0
+            fi
             sleep 2
           done
-          curl -f http://localhost:5000 || exit 1
 
-      # ИСПРАВЛЕНО: тесты запускаются в контейнере внутри сети compose
-      - name: Run tests (parallel, -n auto)
-        run: docker compose run --rm tests
+          echo "Web service did not become ready"
+          docker compose ps
+          docker compose logs web
+          exit 1
 
-      - name: Upload report
+      - name: Wait for Selenium
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS \
+              http://localhost:4444/wd/hub/status \
+              > /tmp/selenium-status.json; then
+              if grep -q '"ready"[[:space:]]*:[[:space:]]*true' \
+                /tmp/selenium-status.json; then
+                echo "Selenium is ready"
+                exit 0
+              fi
+            fi
+            sleep 2
+          done
+
+          echo "Selenium did not become ready"
+          docker compose logs selenium-hub chrome
+          exit 1
+
+      - name: Run tests and generate HTML report
+        run: |
+          mkdir -p reports
+          docker compose run --rm tests
+
+      - name: Upload HTML report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: pytest-report
           path: reports/report.html
+          if-no-files-found: warn
 
       - name: Show container logs on failure
         if: failure()
-        run: docker compose logs
+        run: docker compose logs --no-color
 
-      - name: Shutdown docker compose
+      - name: Shutdown Docker Compose
         if: always()
         run: docker compose down -v

@@ -1,0 +1,55 @@
+services:
+  web:
+    build: .
+    image: lab3-app
+    ports:
+      - "5000:5000"
+    environment:
+      - USERS_DB=/data/users.db
+    volumes:
+      - dbdata:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/users')"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  selenium-hub:
+    image: selenium/hub:4.25.0
+    ports:
+      - "4444:4444"
+
+  chrome:
+    image: selenium/node-chrome:4.25.0
+    shm_size: "2gb"
+    depends_on:
+      - selenium-hub
+    environment:
+      - SE_EVENT_BUS_HOST=selenium-hub
+      - SE_EVENT_BUS_PUBLISH_PORT=4442
+      - SE_EVENT_BUS_SUBSCRIBE_PORT=4443
+      - SE_NODE_MAX_SESSIONS=4
+      - SE_NODE_OVERRIDE_MAX_SESSIONS=true
+
+  # ИСПРАВЛЕНО: тесты запускаются внутри сети Docker, где доступны имена web и selenium-hub
+  tests:
+    image: lab3-app
+    profiles: ["test"]
+    command: pytest
+    depends_on:
+      web:
+        condition: service_healthy
+      selenium-hub:
+        condition: service_started
+      chrome:
+        condition: service_started
+    environment:
+      - USERS_DB=/data/users.db
+      - BASE_URL=http://web:5000
+      - HUB_URL=http://selenium-hub:4444/wd/hub
+    volumes:
+      - dbdata:/data
+      - ./reports:/app/reports
+
+volumes:
+  dbdata:
